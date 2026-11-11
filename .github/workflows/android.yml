@@ -1,0 +1,68 @@
+name: Build APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Download nodejs-mobile (the Android build of Node.js)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          URL=$(curl -fsSL -H "Authorization: Bearer $GH_TOKEN" https://api.github.com/repos/nodejs-mobile/nodejs-mobile/releases/latest \
+            | jq -r '[.assets[] | select(.name | (contains("android") and endswith(".zip")))][0].browser_download_url')
+          echo "Downloading: $URL"
+          [ -n "$URL" ] && [ "$URL" != "null" ] || { echo "No Android zip found in the latest nodejs-mobile release"; exit 1; }
+          curl -fsSL -o nm.zip "$URL"
+          rm -rf nm && mkdir nm && unzip -q nm.zip -d nm
+          SO=$(find nm -path '*arm64-v8a/libnode.so' | head -1)
+          NODEH=$(find nm -name node.h | head -1)
+          if [ -z "$SO" ] || [ -z "$NODEH" ]; then echo "libnode.so or node.h not found in the download"; find nm | head -60; exit 1; fi
+          mkdir -p app/libnode/bin/arm64-v8a app/libnode/include
+          cp "$SO" app/libnode/bin/arm64-v8a/libnode.so
+          cp -r "$(dirname "$NODEH")" app/libnode/include/node
+          ls -la app/libnode/bin/arm64-v8a
+
+      - name: Install Android platform, NDK and CMake
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-34" "build-tools;34.0.0" "ndk;26.1.10909125" "cmake;3.22.1"
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+
+      - name: Build the APK
+        run: gradle --no-daemon assembleDebug
+
+      - name: Name the APK
+        run: cp app/build/outputs/apk/debug/app-debug.apk ShoaibLauncher.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ShoaibLauncher-apk
+          path: ShoaibLauncher.apk
+
+      - name: Publish a release (direct download link for the phone)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "build-${{ github.run_number }}" ShoaibLauncher.apk \
+            --title "Shoaib Launcher build ${{ github.run_number }}" \
+            --notes "Install ShoaibLauncher.apk (allow installing from this source when Android asks)."

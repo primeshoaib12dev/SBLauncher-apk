@@ -1,0 +1,8 @@
+.gradle/
+build/
+app/build/
+app/libnode/
+local.properties
+*.iml
+.idea/
+ShoaibLauncher.apk
